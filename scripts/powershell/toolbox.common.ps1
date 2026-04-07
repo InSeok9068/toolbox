@@ -22,3 +22,49 @@ function Assert-ToolboxCommand {
         }
     }
 }
+
+function Get-ToolboxBundledCommand {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Name
+    )
+
+    if ([string]::IsNullOrWhiteSpace($env:TOOLBOX_BIN_DIR)) {
+        throw 'TOOLBOX_BIN_DIR is not set.'
+    }
+
+    $commandPath = Join-Path $env:TOOLBOX_BIN_DIR $Name
+    if (-not (Test-Path -LiteralPath $commandPath -PathType Leaf)) {
+        throw "Bundled command not found: $commandPath"
+    }
+
+    return $commandPath
+}
+
+function Get-ToolboxSystemCommand {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Name
+    )
+
+    $command = Get-Command $Name -ErrorAction SilentlyContinue
+    if (-not $command) {
+        throw "Required command not found: $Name"
+    }
+
+    return $command.Source
+}
+
+function ConvertTo-ToolboxShellArgument {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Value
+    )
+
+    $normalizedValue = $Value
+    if ($env:OS -eq 'Windows_NT') {
+        $normalizedValue = $normalizedValue -replace '\\', '/'
+    }
+
+    return "'" + $normalizedValue.Replace("'", "'\''") + "'"
+}

@@ -4,7 +4,11 @@ param()
 . (Join-Path $PSScriptRoot 'toolbox.common.ps1')
 
 Set-ToolboxUtf8Console
-Assert-ToolboxCommand -Name @('rg', 'fzf', 'bat', 'code')
+
+$rgPath = Get-ToolboxBundledCommand -Name 'rg.exe'
+$fzfPath = Get-ToolboxBundledCommand -Name 'fzf.exe'
+$batPath = Get-ToolboxBundledCommand -Name 'bat.exe'
+$codePath = Get-ToolboxSystemCommand -Name 'code'
 
 $excludeGlobs = @(
     '!.git',
@@ -16,7 +20,7 @@ $excludeGlobs = @(
 )
 
 $rgPrefixParts = @(
-    'rg',
+    (ConvertTo-ToolboxShellArgument -Value $rgPath),
     '--column',
     '--line-number',
     '--no-heading',
@@ -28,9 +32,9 @@ $rgPrefixParts = @(
 $rgPrefix = $rgPrefixParts -join ' '
 $startReload = "start:reload:$rgPrefix '' || cd ."
 $changeReload = "change:reload:$rgPrefix {q} || cd ."
-$previewCommand = 'bat --color=always --style=numbers --line-range=:500 --highlight-line {2} -- {1}'
+$previewCommand = "$(ConvertTo-ToolboxShellArgument -Value $batPath) --color=always --style=numbers --line-range=:500 --highlight-line {2} -- {1}"
 
-fzf `
+& $fzfPath `
     --ansi `
     --disabled `
     --prompt 'rg> ' `
@@ -42,6 +46,6 @@ fzf `
     --preview-window 'right:60%:wrap,+{2}/2' |
     ForEach-Object {
         if ($_ -match '^(.*?):([0-9]+):([0-9]+):(.*)$') {
-            code --goto "$($matches[1]):$($matches[2]):$($matches[3])"
+            & $codePath --goto "$($matches[1]):$($matches[2]):$($matches[3])"
         }
     }

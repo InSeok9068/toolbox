@@ -4,7 +4,11 @@ param()
 . (Join-Path $PSScriptRoot 'toolbox.common.ps1')
 
 Set-ToolboxUtf8Console
-Assert-ToolboxCommand -Name @('fd', 'fzf', 'bat', 'code')
+
+$fdPath = Get-ToolboxBundledCommand -Name 'fd.exe'
+$fzfPath = Get-ToolboxBundledCommand -Name 'fzf.exe'
+$batPath = Get-ToolboxBundledCommand -Name 'bat.exe'
+$codePath = Get-ToolboxSystemCommand -Name 'code'
 
 $fdArguments = @(
     '--type', 'f',
@@ -17,15 +21,15 @@ $fdArguments = @(
     '--exclude', 'coverage'
 )
 
-$previewCommand = 'bat --color=always --style=numbers --line-range=:500 {}'
+$previewCommand = "$(ConvertTo-ToolboxShellArgument -Value $batPath) --color=always --style=numbers --line-range=:500 {}"
 
-& fd @fdArguments |
-    fzf `
+& $fdPath @fdArguments |
+    & $fzfPath `
         --preview $previewCommand `
         --preview-window 'right:60%:wrap' `
         --bind 'ctrl-/:toggle-preview' |
     ForEach-Object {
         if (-not [string]::IsNullOrWhiteSpace($_)) {
-            code $_
+            & $codePath $_
         }
     }
