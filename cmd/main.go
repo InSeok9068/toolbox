@@ -86,8 +86,8 @@ func newRootCmd() *cobra.Command {
 		},
 	}
 
-	rootCmd.AddCommand(newPassthroughCommand("rg", "ripgrep 직접 실행"))
-	rootCmd.AddCommand(newPassthroughCommand("fd", "fd 직접 실행"))
+	rootCmd.AddCommand(newShortcutCommand("rg", "문자열 검색 바로 실행", newPowerShellScriptCommand("scripts/powershell/fzf-rg.ps1")))
+	rootCmd.AddCommand(newShortcutCommand("fd", "파일 검색 바로 실행", newPowerShellScriptCommand("scripts/powershell/fzf-fd.ps1")))
 
 	return rootCmd
 }
@@ -137,15 +137,14 @@ func newPowerShellScriptCommand(scriptPath string, args ...string) toolCommand {
 	}
 }
 
-func newPassthroughCommand(name string, short string) *cobra.Command {
+func newShortcutCommand(name string, short string, command toolCommand) *cobra.Command {
 	return &cobra.Command{
-		Use:                name + " [args...]",
-		Short:              short,
-		SilenceUsage:       true,
-		DisableFlagParsing: true,
-		Args:               cobra.ArbitraryArgs,
+		Use:          name,
+		Short:        short,
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPassthroughCommand(name, args)
+			return runTool(command)
 		},
 	}
 }
@@ -166,20 +165,6 @@ func runTool(command toolCommand) error {
 	}
 
 	return nil
-}
-
-func runPassthroughCommand(name string, args []string) error {
-	path, err := exec.LookPath(name)
-	if err != nil {
-		return fmt.Errorf("%q 실행 파일을 찾을 수 없습니다: %w", name, err)
-	}
-
-	cmd := exec.Command(path, args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	return cmd.Run()
 }
 
 func resolveCommand(command toolCommand) (string, []string, error) {

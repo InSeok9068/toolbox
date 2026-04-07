@@ -28,7 +28,7 @@ $rgPrefixParts = @(
 $rgPrefix = $rgPrefixParts -join ' '
 $startReload = "start:reload:$rgPrefix '' || cd ."
 $changeReload = "change:reload:$rgPrefix {q} || cd ."
-$previewCommand = 'bat --style=numbers --color=always --highlight-line {2} -- {1} 2>NUL'
+$previewCommand = 'bat --style=numbers --color=always --highlight-line {2} -- {1}'
 
 fzf `
     --ansi `
