@@ -3,11 +3,9 @@ package main
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/spf13/cobra"
@@ -20,7 +18,6 @@ type commandSource string
 const (
 	sourceDirect     commandSource = "Direct"
 	sourcePowerShell commandSource = "PowerShell"
-	sourceInternal   commandSource = "Internal"
 )
 
 type menuOption struct {
@@ -40,12 +37,12 @@ var options = []menuOption{
 	{
 		Title:       "rg",
 		Description: "문자열 검색",
-		Command:     newInternalCommand("fzf-rg"),
+		Command:     newPowerShellScriptCommand("scripts/powershell/fzf-rg.ps1"),
 	},
 	{
 		Title:       "fd",
 		Description: "파일 검색",
-		Command:     newInternalCommand("fzf-fd"),
+		Command:     newPowerShellScriptCommand("scripts/powershell/fzf-fd.ps1"),
 	},
 	{
 		Title:       "lazygit",
@@ -62,23 +59,20 @@ var options = []menuOption{
 func main() {
 	defer cleanupEmbeddedScripts()
 
-	if handled, err := runInternalEntry(os.Args[1:]); handled {
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	}
-
 	rootCmd := newRootCmd()
 	if err := rootCmd.Execute(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.ExitCode())
+		}
+
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
 func newRootCmd() *cobra.Command {
-	return &cobra.Command{
+	rootCmd := &cobra.Command{
 		Use:          "toolbox",
 		Short:        "작업 도구 실행기",
 		SilenceUsage: true,
@@ -91,6 +85,11 @@ func newRootCmd() *cobra.Command {
 			return runTool(selected.Command)
 		},
 	}
+
+	rootCmd.AddCommand(newPassthroughCommand("rg", "ripgrep 직접 실행"))
+	rootCmd.AddCommand(newPassthroughCommand("fd", "fd 직접 실행"))
+
+	return rootCmd
 }
 
 func promptOption() (menuOption, error) {
@@ -138,19 +137,20 @@ func newPowerShellScriptCommand(scriptPath string, args ...string) toolCommand {
 	}
 }
 
-func newInternalCommand(name string, args ...string) toolCommand {
-	return toolCommand{
-		Source:  sourceInternal,
-		Program: name,
-		Args:    args,
+func newPassthroughCommand(name string, short string) *cobra.Command {
+	return &cobra.Command{
+		Use:                name + " [args...]",
+		Short:              short,
+		SilenceUsage:       true,
+		DisableFlagParsing: true,
+		Args:               cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runPassthroughCommand(name, args)
+		},
 	}
 }
 
 func runTool(command toolCommand) error {
-	if command.Source == sourceInternal {
-		return runInternalCommand(command)
-	}
-
 	program, args, err := resolveCommand(command)
 	if err != nil {
 		return err
@@ -168,6 +168,20 @@ func runTool(command toolCommand) error {
 	return nil
 }
 
+func runPassthroughCommand(name string, args []string) error {
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return fmt.Errorf("%q 실행 파일을 찾을 수 없습니다: %w", name, err)
+	}
+
+	cmd := exec.Command(path, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return cmd.Run()
+}
+
 func resolveCommand(command toolCommand) (string, []string, error) {
 	switch command.Source {
 	case sourceDirect:
@@ -183,8 +197,6 @@ func resolveCommand(command toolCommand) (string, []string, error) {
 		return path, command.Args, nil
 	case sourcePowerShell:
 		return resolvePowerShellCommand(command)
-	case sourceInternal:
-		return "", nil, fmt.Errorf("내부 명령은 직접 resolve할 수 없습니다: %s", command.Program)
 	default:
 		return "", nil, fmt.Errorf("지원하지 않는 실행 소스입니다: %s", command.Source)
 	}
@@ -285,7 +297,7 @@ func ensureFileExists(path string) (string, error) {
 }
 
 func describeCommand(command toolCommand) string {
-	if command.Source == sourceDirect || command.Source == sourceInternal {
+	if command.Source == sourceDirect {
 		return command.Program
 	}
 
@@ -300,244 +312,4 @@ func cleanupEmbeddedScripts() {
 	if err := embeddedscripts.Cleanup(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 	}
-}
-
-func runInternalEntry(args []string) (bool, error) {
-	if len(args) == 0 {
-		return false, nil
-	}
-
-	switch args[0] {
-	case "__rg_reload__":
-		return true, runRGReload(args[1:])
-	default:
-		return false, nil
-	}
-}
-
-func runInternalCommand(command toolCommand) error {
-	switch command.Program {
-	case "fzf-rg":
-		return runFzfRG()
-	case "fzf-fd":
-		return runFzfFD()
-	default:
-		return fmt.Errorf("알 수 없는 내부 명령입니다: %s", command.Program)
-	}
-}
-
-func runFzfRG() error {
-	if _, err := lookPathAll("fzf", "rg", "bat", "code"); err != nil {
-		return err
-	}
-
-	executablePath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("현재 실행 파일 경로를 확인할 수 없습니다: %w", err)
-	}
-
-	quotedExecutable := fmt.Sprintf(`"%s"`, executablePath)
-	reloadOnStart := fmt.Sprintf(`start:reload:%s __rg_reload__ ""`, quotedExecutable)
-	reloadOnChange := fmt.Sprintf(`change:reload:%s __rg_reload__ "{q}"`, quotedExecutable)
-	previewCommand := `bat --style=numbers --color=always --highlight-line {2} -- "{1}" 2>NUL`
-	openCommand := `enter:become(code --goto "{1}:{2}:{3}")`
-
-	args := []string{
-		"--ansi",
-		"--disabled",
-		"--prompt", "rg> ",
-		"--delimiter", ":",
-		"--with-nth", "1,2,4..",
-		"--bind", reloadOnStart,
-		"--bind", reloadOnChange,
-		"--bind", openCommand,
-		"--preview", previewCommand,
-		"--preview-window", "right:60%:wrap,+{2}/2",
-	}
-
-	return runFzf(args, nil)
-}
-
-func runFzfFD() error {
-	fdPath, err := lookPathAll("fd", "fzf", "bat", "code")
-	if err != nil {
-		return err
-	}
-
-	previewCommand := `bat --color=always --style=numbers --line-range=:500 -- "{}" 2>NUL`
-	openCommand := `enter:become(code "{}")`
-
-	fzfArgs := []string{
-		"--preview", previewCommand,
-		"--preview-window", "right:60%:wrap",
-		"--bind", "ctrl-/:toggle-preview",
-		"--bind", openCommand,
-	}
-
-	fdCommand := exec.Command(fdPath[0],
-		"--type", "f",
-		"--hidden",
-		"--exclude", ".git",
-		"--exclude", "node_modules",
-		"--exclude", "dist",
-		"--exclude", "build",
-		"--exclude", ".next",
-		"--exclude", "coverage",
-	)
-
-	return runFzf(fzfArgs, fdCommand)
-}
-
-func runFzf(args []string, inputCommand *exec.Cmd) error {
-	fzfPath, err := exec.LookPath("fzf")
-	if err != nil {
-		return fmt.Errorf("%q 실행 파일을 찾을 수 없습니다: %w", "fzf", err)
-	}
-
-	fzfCommand := exec.Command(fzfPath, args...)
-	fzfCommand.Stdin = os.Stdin
-	fzfCommand.Stdout = os.Stdout
-	fzfCommand.Stderr = os.Stderr
-	fzfCommand.Env = withShellOverride(os.Environ(), "cmd.exe")
-
-	if inputCommand != nil {
-		pipeReader, pipeWriter, err := os.Pipe()
-		if err != nil {
-			return fmt.Errorf("fzf 입력 파이프를 준비할 수 없습니다: %w", err)
-		}
-
-		inputCommand.Stdout = pipeWriter
-		inputCommand.Stderr = os.Stderr
-		inputCommand.Env = os.Environ()
-
-		fzfCommand.Stdin = pipeReader
-
-		if err := inputCommand.Start(); err != nil {
-			_ = pipeReader.Close()
-			_ = pipeWriter.Close()
-			return fmt.Errorf("%s 실행을 시작할 수 없습니다: %w", inputCommand.Path, err)
-		}
-
-		if err := fzfCommand.Start(); err != nil {
-			_ = pipeReader.Close()
-			_ = pipeWriter.Close()
-			_ = inputCommand.Process.Kill()
-			_ = inputCommand.Wait()
-			return fmt.Errorf("%q 실행을 시작할 수 없습니다: %w", "fzf", err)
-		}
-
-		_ = pipeWriter.Close()
-		_ = pipeReader.Close()
-
-		inputErr := inputCommand.Wait()
-		fzfErr := fzfCommand.Wait()
-
-		if inputErr != nil && !isIgnorablePipeError(inputErr) {
-			return fmt.Errorf("%s 실행 중 오류가 발생했습니다: %w", inputCommand.Path, inputErr)
-		}
-
-		if fzfErr != nil {
-			return fmt.Errorf("%q 실행 중 오류가 발생했습니다: %w", "fzf", fzfErr)
-		}
-
-		return nil
-	}
-
-	if err := fzfCommand.Run(); err != nil {
-		return fmt.Errorf("%q 실행 중 오류가 발생했습니다: %w", "fzf", err)
-	}
-
-	return nil
-}
-
-func runRGReload(args []string) error {
-	query := ""
-	if len(args) > 0 {
-		query = strings.TrimSpace(args[0])
-	}
-
-	if query == "" {
-		return nil
-	}
-
-	rgPath, err := exec.LookPath("rg")
-	if err != nil {
-		return fmt.Errorf("%q 실행 파일을 찾을 수 없습니다: %w", "rg", err)
-	}
-
-	commandArgs := []string{
-		"--column",
-		"--line-number",
-		"--no-heading",
-		"--color=always",
-		"--smart-case",
-		"--hidden",
-		"-g", "!.git",
-		"-g", "!node_modules",
-		"-g", "!dist",
-		"-g", "!build",
-		"-g", "!.next",
-		"-g", "!coverage",
-		query,
-	}
-
-	cmd := exec.Command(rgPath, commandArgs...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = io.Discard
-
-	if err := cmd.Run(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-			return nil
-		}
-
-		return fmt.Errorf("%q 실행 중 오류가 발생했습니다: %w", "rg", err)
-	}
-
-	return nil
-}
-
-func isIgnorablePipeError(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "broken pipe") || strings.Contains(message, "pipe has been ended")
-}
-
-func withShellOverride(env []string, shell string) []string {
-	updatedEnv := make([]string, 0, len(env)+1)
-	replaced := false
-
-	for _, item := range env {
-		if len(item) >= 6 && item[:6] == "SHELL=" {
-			updatedEnv = append(updatedEnv, "SHELL="+shell)
-			replaced = true
-			continue
-		}
-
-		updatedEnv = append(updatedEnv, item)
-	}
-
-	if !replaced {
-		updatedEnv = append(updatedEnv, "SHELL="+shell)
-	}
-
-	return updatedEnv
-}
-
-func lookPathAll(names ...string) ([]string, error) {
-	paths := make([]string, 0, len(names))
-
-	for _, name := range names {
-		path, err := exec.LookPath(name)
-		if err != nil {
-			return nil, fmt.Errorf("%q 실행 파일을 찾을 수 없습니다: %w", name, err)
-		}
-
-		paths = append(paths, path)
-	}
-
-	return paths, nil
 }
