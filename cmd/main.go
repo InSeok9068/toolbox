@@ -53,11 +53,6 @@ var options = []menuOption{
 		Description: "Git TUI",
 		Command:     newDirectCommand("lazygit"),
 	},
-	{
-		Title:       "install",
-		Description: "의존성 설치",
-		Command:     newPowerShellScriptCommand("scripts/powershell/install-dependencies.ps1"),
-	},
 }
 
 func main() {
