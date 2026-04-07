@@ -159,6 +159,7 @@ func runTool(command toolCommand) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Env = commandEnvironment()
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("%s 실행 중 오류가 발생했습니다: %w", describeCommand(command), err)
@@ -174,9 +175,9 @@ func resolveCommand(command toolCommand) (string, []string, error) {
 			return "", nil, fmt.Errorf("직접 실행 명령의 프로그램 이름이 비어 있습니다")
 		}
 
-		path, err := exec.LookPath(command.Program)
+		path, err := resolveExecutablePath(command.Program)
 		if err != nil {
-			return "", nil, fmt.Errorf("%q 실행 파일을 찾을 수 없습니다: %w", command.Program, err)
+			return "", nil, err
 		}
 
 		return path, command.Args, nil
@@ -217,7 +218,7 @@ func resolvePowerShellCommand(command toolCommand) (string, []string, error) {
 
 func findPowerShell() (string, error) {
 	for _, candidate := range []string{"pwsh", "powershell"} {
-		path, err := exec.LookPath(candidate)
+		path, err := resolveExecutablePath(candidate)
 		if err == nil {
 			return path, nil
 		}
@@ -275,7 +276,12 @@ func ensureFileExists(path string) (string, error) {
 	}
 
 	if info.IsDir() {
-		return "", fmt.Errorf("스크립트 경로가 파일이 아닙니다: %s", path)
+		return "", fmt.Errorf("경로가 파일이 아닙니다: %s", path)
+	}
+
+	resolvedPath, err := filepath.Abs(path)
+	if err == nil {
+		return resolvedPath, nil
 	}
 
 	return path, nil
